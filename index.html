@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>离线 BIN 地图编辑器</title>
+
+<style>
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    background: #111;
+    color: #fff;
+    font-family: Arial, sans-serif;
+    overflow: hidden;
+}
+
+.container {
+    display: flex;
+    height: 100vh;
+}
+
+.left {
+    width: 75%;
+    background: #222;
+    display: flex;
+    flex-direction: column;
+}
+
+.topbar {
+    padding: 10px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.canvas-container {
+    flex: 1;
+    overflow: auto;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+
+.right {
+    width: 25%;
+    background: #1a1a1a;
+    border-left: 1px solid #333;
+    padding: 15px;
+    overflow-y: auto;
+}
+
+input[type="number"],
+input[type="file"] {
+    width: 100%;
+    margin-bottom: 10px;
+    padding: 5px;
+    background: #333;
+    border: 1px solid #555;
+    color: #fff;
+}
+
+button {
+    width: 100%;
+    padding: 8px;
+    margin-bottom: 10px;
+    border: none;
+    background: #2563eb;
+    color: #fff;
+    cursor: pointer;
+}
+
+button:hover {
+    background: #1d4ed8;
+}
+
+canvas {
+    background: black;
+}
+
+.info {
+    font-size: 12px;
+    color: #aaa;
+}
+</style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <!-- 左侧 -->
+    <div class="left">
+
+        <div class="topbar">
+            <input type="file" id="fileInput">
+            <button id="downloadBtn" style="width:auto;padding:6px 12px;">
+                下载修改后的BIN
+            </button>
+            <span id="info" class="info"></span>
+        </div>
+
+        <div class="canvas-container">
+            <canvas id="canvas"></canvas>
+        </div>
+
+    </div>
+
+    <!-- 右侧 -->
+    <div class="right">
+
+        <h3>地图尺寸</h3>
+
+        <label>宽度</label>
+        <input id="mapXInput" type="number">
+
+        <label>高度</label>
+        <input id="mapYInput" type="number">
+
+        <button id="resizeBtn">重设尺寸</button>
+
+    </div>
+
+</div>
+
+<script>
+
+const canvas = document.getElementById('canvas');
+const ctx = canvas.getContext('2d');
+
+let originalHeader = null;
+let terrainData = null;
+let mapX = 0;
+let mapY = 0;
+const tileSize = 10;
+
+// 读取 BIN
+document.getElementById('fileInput').addEventListener('change', e => {
+    const reader = new FileReader();
+
+    reader.onload = function(ev) {
+        parseBin(ev.target.result);
+    };
+
+    reader.readAsArrayBuffer(e.target.files[0]);
+});
+
+function parseBin(buffer) {
+
+    const view = new DataView(buffer);
+
+    mapX = view.getUint32(8, true);
+    mapY = view.getUint32(12, true);
+
+    originalHeader = new Uint8Array(buffer.slice(0, 16));
+    terrainData = new Uint8Array(buffer.slice(16));
+
+    document.getElementById('mapXInput').value = mapX;
+    document.getElementById('mapYInput').value = mapY;
+
+    document.getElementById('info').textContent =
+        `尺寸: ${mapX} × ${mapY}`;
+
+    drawMap();
+}
+
+function drawMap() {
+
+    canvas.width = mapX * tileSize;
+    canvas.height = mapY * tileSize;
+
+    const scale = Math.min(
+        (window.innerWidth * 0.75) / canvas.width,
+        window.innerHeight / canvas.height,
+        1
+    );
+
+    ctx.setTransform(scale, 0, 0, scale, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    for (let y = 0; y < mapY; y++) {
+        for (let x = 0; x < mapX; x++) {
+
+            const index = y * mapX + x;
+            const value = terrainData[index];
+
+            ctx.fillStyle = getColor(value);
+            ctx.fillRect(
+                x * tileSize,
+                y * tileSize,
+                tileSize,
+                tileSize
+            );
+        }
+    }
+}
+
+function getColor(v) {
+    switch (v) {
+        case 0: return "#1e40af"; // 蓝
+        case 1: return "#16a34a"; // 绿
+        case 2: return "#ca8a04"; // 黄
+        case 3: return "#dc2626"; // 红
+        default: return "#444";
+    }
+}
+
+// 点击修改地块
+canvas.addEventListener('click', e => {
+
+    const rect = canvas.getBoundingClientRect();
+    const scaleX = canvas.width / rect.width;
+    const scaleY = canvas.height / rect.height;
+
+    const x = Math.floor((e.clientX - rect.left) * scaleX / tileSize);
+    const y = Math.floor((e.clientY - rect.top) * scaleY / tileSize);
+
+    if (x >= 0 && x < mapX && y >= 0 && y < mapY) {
+        const index = y * mapX + x;
+        terrainData[index] = (terrainData[index] + 1) % 4;
+        drawMap();
+    }
+});
+
+// 重设尺寸
+document.getElementById('resizeBtn').addEventListener('click', () => {
+
+    const newX = parseInt(document.getElementById('mapXInput').value);
+    const newY = parseInt(document.getElementById('mapYInput').value);
+
+    const newTerrain = new Uint8Array(newX * newY);
+
+    for (let y = 0; y < Math.min(mapY, newY); y++) {
+        for (let x = 0; x < Math.min(mapX, newX); x++) {
+            newTerrain[y * newX + x] =
+                terrainData[y * mapX + x];
+        }
+    }
+
+    mapX = newX;
+    mapY = newY;
+    terrainData = newTerrain;
+
+    drawMap();
+});
+
+// 下载修改后的 BIN
+document.getElementById('downloadBtn').addEventListener('click', () => {
+
+    if (!terrainData || !originalHeader) return;
+
+    const newBuffer = new ArrayBuffer(16 + terrainData.length);
+    const view = new DataView(newBuffer);
+
+    new Uint8Array(newBuffer, 0, 16).set(originalHeader);
+
+    view.setUint32(8, mapX, true);
+    view.setUint32(12, mapY, true);
+
+    new Uint8Array(newBuffer, 16).set(terrainData);
+
+    const blob = new Blob([newBuffer], { type: "application/octet-stream" });
+
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "modified_map.bin";
+    a.click();
+});
+
+</script>
+
+</body>
+</html>
